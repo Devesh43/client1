@@ -1,26 +1,83 @@
 @import "tailwindcss";
 
+@theme {
+  --color-navy-950: #0a1120;
+  --color-navy-900: #111c30;
+  --color-navy-850: #16233b;
+  --color-navy-800: #1d2633;
+  --color-navy-700: #293649;
+  
+  --color-gold-300: #eedec0;
+  --color-gold-400: #d8b883;
+  --color-gold-500: #c7a66b;
+  --color-gold-600: #a98b56;
+  --color-gold-700: #886d3d;
+  
+  --color-ivory: #faf9f6;
+  --color-ivory-warm: #f4f2ec;
+  --color-border-light: #e7e4de;
+  --color-text-secondary: #657080;
+  --color-text-muted: #8e99a8;
+
+  --font-serif: var(--font-playfair), "Cormorant Garamond", "Playfair Display", Georgia, serif;
+  --font-sans: var(--font-manrope), "Manrope", "Plus Jakarta Sans", system-ui, sans-serif;
+}
+
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --background: #faf9f6;
+  --foreground: #111c30;
 }
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+html {
+  scroll-behavior: smooth;
+  color-scheme: light;
 }
 
 body {
-  background: var(--background);
+  background-color: var(--background);
   color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  overflow-x: hidden;
+}
+
+::selection {
+  background-color: #c7a66b;
+  color: #111c30;
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 8px;
+}
+::-webkit-scrollbar-track {
+  background: #f4f2ec;
+}
+::-webkit-scrollbar-thumb {
+  background: #c7a66b;
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #a98b56;
+}
+
+/* Subtle gold border accent helper */
+.gold-gradient-border {
+  border-image: linear-gradient(to right, rgba(199, 166, 107, 0.4), rgba(199, 166, 107, 0.05)) 1;
+}
+
+/* Texture overlay for luxury hero sections */
+.bg-grid-pattern {
+  background-image: radial-gradient(rgba(199, 166, 107, 0.12) 1px, transparent 1px);
+  background-size: 32px 32px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }
