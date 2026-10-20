@@ -1,8 +1,7 @@
 import React from "react";
 import type { Metadata } from "next";
 import { COMPANY } from "@/config/company";
-import Link from "next/link";
-import { ShieldCheck, Mail, MapPin, AlertCircle } from "lucide-react";
+import { AlertCircle } from "lucide-react";
 
 export const metadata: Metadata = {
   title: "Privacy Policy | Anvard Global Pvt. Ltd.",
@@ -57,6 +56,7 @@ export default function PrivacyPolicyPage() {
             </p>
             <ul className="list-disc pl-5 space-y-1.5 text-sm">
               <li><strong>Full Name:</strong> To identify and address you appropriately.</li>
+              <li><strong>Email Address:</strong> To send an acknowledgement with your enquiry reference and to respond to your request.</li>
               <li><strong>Telephone Number:</strong> To connect regarding your business inquiry.</li>
               <li><strong>Service Focus Area:</strong> To understand your specific consulting requirements.</li>
               <li><strong>Business Query:</strong> The details, context, and requirements you submit.</li>
@@ -73,6 +73,7 @@ export default function PrivacyPolicyPage() {
             </p>
             <ul className="list-disc pl-5 space-y-1.5 text-sm">
               <li>Review your commercial requirements and respond with relevant advisory information.</li>
+              <li>Send an automated acknowledgement email containing a reference ID for your enquiry.</li>
               <li>Coordinate initial telephone or virtual consultations.</li>
               <li>Maintain internal business communication logs.</li>
             </ul>

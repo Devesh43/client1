@@ -3,7 +3,7 @@ import type { Metadata } from "next";
 import Image from "next/image";
 import Link from "next/link";
 import { COMPANY } from "@/config/company";
-import { Shield, Lightbulb, TrendingUp, Award, Compass, CheckCircle2, ArrowRight } from "lucide-react";
+import { Shield, Lightbulb, TrendingUp, Award, Compass, ArrowRight } from "lucide-react";
 import { CtaBanner } from "@/components/home/CtaBanner";
 
 export const metadata: Metadata = {

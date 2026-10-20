@@ -13,6 +13,7 @@ export function Footer() {
   const { openEnquiry } = useEnquiry();
 
   React.useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- the current year is only known at runtime
     setCurrentYear(new Date().getFullYear());
   }, []);
 

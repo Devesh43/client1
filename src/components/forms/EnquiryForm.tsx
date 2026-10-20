@@ -1,10 +1,11 @@
 "use client";
 
 import React, { useState } from "react";
+import Link from "next/link";
 import { useForm } from "react-hook-form";
 import { enquirySchema, type EnquiryFormData } from "@/lib/validation";
-import { SERVICE_OPTIONS } from "@/config/services";
-import { CheckCircle2, AlertCircle, Loader2, ArrowRight } from "lucide-react";
+import { SERVICE_OPTIONS, type ServiceOption } from "@/config/services";
+import { CheckCircle2, AlertCircle, Loader2, ArrowRight, Copy, Check } from "lucide-react";
 
 interface EnquiryFormProps {
   defaultService?: string;
@@ -22,6 +23,17 @@ export function EnquiryForm({
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitSuccess, setSubmitSuccess] = useState<string | null>(null);
   const [submitError, setSubmitError] = useState<string | null>(null);
+  const [submission, setSubmission] = useState<{
+    referenceId: string;
+    email: string;
+  } | null>(null);
+  const [copied, setCopied] = useState(false);
+
+  const normalizedService: ServiceOption = SERVICE_OPTIONS.includes(
+    defaultService as ServiceOption
+  )
+    ? (defaultService as ServiceOption)
+    : "General Enquiry";
 
   const {
     register,
@@ -31,19 +43,31 @@ export function EnquiryForm({
   } = useForm<EnquiryFormData>({
     defaultValues: {
       fullName: "",
+      email: "",
       phoneNumber: "",
-      serviceInterestedIn: (SERVICE_OPTIONS.includes(defaultService as any)
-        ? defaultService
-        : "General Enquiry") as any,
+      serviceInterestedIn: normalizedService,
       query: "",
       website: "", // Honeypot trap
     },
   });
 
+  const handleCopyReference = async () => {
+    if (!submission) return;
+    try {
+      await navigator.clipboard.writeText(submission.referenceId);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 2000);
+    } catch {
+      // Clipboard access can be unavailable; the reference is still selectable.
+    }
+  };
+
   const onSubmit = async (data: EnquiryFormData) => {
     setIsSubmitting(true);
     setSubmitError(null);
     setSubmitSuccess(null);
+    setSubmission(null);
+    setCopied(false);
 
     // Client-side Zod validation pass
     const parsed = enquirySchema.safeParse(data);
@@ -60,28 +84,40 @@ export function EnquiryForm({
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify(data),
+        body: JSON.stringify(parsed.data),
       });
 
-      const result = await response.json();
+      const result = (await response.json()) as {
+        success?: boolean;
+        error?: string;
+        message?: string;
+        referenceId?: string;
+      };
 
       if (!response.ok || !result.success) {
         throw new Error(result.error || "Failed to submit enquiry. Please try again.");
       }
 
+      setSubmission({
+        referenceId: result.referenceId || "Reference pending",
+        email: parsed.data.email,
+      });
       setSubmitSuccess(result.message || "Thank you for reaching out. Your enquiry has been received. Our team will review your message.");
       reset();
+
       if (onSuccess) {
-        setTimeout(() => {
+        // Give the visitor time to note or copy their reference ID.
+        window.setTimeout(() => {
           onSuccess();
-        }, 2500);
+        }, 6000);
       }
-    } catch (err: any) {
-      console.error("[Form Submit Error]:", err);
-      setSubmitError(
-        err.message ||
-          "Unable to send enquiry at this moment. Please call us directly at +91 8010416869 or email Anvardglobal@gmail.com."
-      );
+    } catch (err: unknown) {
+      const message =
+        err instanceof Error
+          ? err.message
+          : "Unable to send enquiry at this moment. Please call us directly at +91 8010416869 or email Anvardglobal@gmail.com.";
+      console.error("[Form Submit Error]:", message);
+      setSubmitError(message);
     } finally {
       setIsSubmitting(false);
     }
@@ -89,7 +125,11 @@ export function EnquiryForm({
 
   if (submitSuccess) {
     return (
-      <div className="rounded-lg border border-gold-500/40 bg-navy-950 p-8 text-center text-ivory shadow-xl animate-in fade-in zoom-in-95 duration-300">
+      <div
+        role="status"
+        aria-live="polite"
+        className="rounded-lg border border-gold-500/40 bg-navy-950 p-8 text-center text-ivory shadow-xl animate-in fade-in zoom-in-95 duration-300"
+      >
         <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-full bg-gold-500/10 text-gold-400">
           <CheckCircle2 className="h-8 w-8 text-gold-500" />
         </div>
@@ -97,12 +137,55 @@ export function EnquiryForm({
         <p className="mt-3 text-sm leading-relaxed text-text-muted">
           {submitSuccess}
         </p>
+
+        {submission && (
+          <>
+            <p className="mt-2 text-xs leading-relaxed text-text-muted">
+              A confirmation email has been sent to{" "}
+              <span className="font-semibold text-ivory">{submission.email}</span>.
+            </p>
+
+            <div className="mt-5 rounded border border-gold-500/30 bg-navy-900/70 px-4 py-3">
+              <div className="text-[10px] font-semibold uppercase tracking-[0.2em] text-gold-500">
+                Your Reference
+              </div>
+              <div className="mt-1.5 flex items-center justify-center gap-2">
+                <code className="font-mono text-sm tracking-wider text-ivory">
+                  {submission.referenceId}
+                </code>
+                <button
+                  type="button"
+                  onClick={handleCopyReference}
+                  aria-label="Copy reference ID"
+                  className="rounded p-1 text-gold-400 transition-colors hover:bg-navy-800 hover:text-gold-300 focus:outline-none focus:ring-1 focus:ring-gold-500"
+                >
+                  {copied ? (
+                    <Check className="h-3.5 w-3.5" />
+                  ) : (
+                    <Copy className="h-3.5 w-3.5" />
+                  )}
+                </button>
+              </div>
+            </div>
+
+            <p className="mt-3 text-[11px] leading-relaxed text-text-secondary">
+              Please quote this reference in any follow-up. If the confirmation
+              email does not arrive, check your spam folder or contact us
+              directly.
+            </p>
+          </>
+        )}
+
         <p className="mt-4 text-xs tracking-wider uppercase text-gold-500 font-semibold">
           Anvard Global Private Limited
         </p>
         <button
           type="button"
-          onClick={() => setSubmitSuccess(null)}
+          onClick={() => {
+            setSubmitSuccess(null);
+            setSubmission(null);
+            setCopied(false);
+          }}
           className="mt-6 inline-flex items-center text-xs text-text-muted hover:text-gold-400 transition-colors underline underline-offset-4"
         >
           Submit another enquiry
@@ -162,6 +245,37 @@ export function EnquiryForm({
         />
         {errors.fullName && (
           <p className="mt-1 text-xs text-red-600">{errors.fullName.message}</p>
+        )}
+      </div>
+
+      {/* Email Address */}
+      <div>
+        <label
+          htmlFor="email"
+          className="block text-xs font-semibold uppercase tracking-wider text-navy-900 mb-1.5"
+        >
+          Email Address <span className="text-gold-600">*</span>
+        </label>
+        <input
+          id="email"
+          type="email"
+          inputMode="email"
+          placeholder="you@company.com"
+          autoComplete="email"
+          disabled={isSubmitting}
+          aria-invalid={errors.email ? "true" : undefined}
+          aria-describedby={errors.email ? "email-error" : undefined}
+          {...register("email")}
+          className={`w-full rounded border px-3.5 py-2.5 text-sm transition-all focus:outline-none focus:ring-1 ${
+            errors.email
+              ? "border-red-400 bg-red-50/30 text-navy-900 focus:border-red-500 focus:ring-red-500"
+              : "border-border-light bg-white text-navy-900 placeholder:text-text-muted/60 focus:border-gold-500 focus:ring-gold-500"
+          }`}
+        />
+        {errors.email && (
+          <p id="email-error" className="mt-1 text-xs text-red-600">
+            {errors.email.message}
+          </p>
         )}
       </div>
 
@@ -259,7 +373,15 @@ export function EnquiryForm({
       </div>
 
       <p className="text-center text-[11px] text-text-secondary leading-relaxed">
-        Confidentiality guaranteed. Details are shared strictly with Anvard Global&apos;s advisory leadership.
+        Confidentiality guaranteed. Details are shared strictly with Anvard Global&apos;s
+        advisory leadership. By submitting, you agree to our{" "}
+        <Link
+          href="/privacy-policy"
+          className="underline underline-offset-2 transition-colors hover:text-gold-700"
+        >
+          Privacy Policy
+        </Link>
+        .
       </p>
     </form>
   );

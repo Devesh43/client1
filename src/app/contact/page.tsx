@@ -2,7 +2,7 @@ import React from "react";
 import type { Metadata } from "next";
 import { COMPANY } from "@/config/company";
 import { EnquiryForm } from "@/components/forms/EnquiryForm";
-import { Phone, Mail, MapPin, Clock, ArrowRight, ShieldCheck, FileText } from "lucide-react";
+import { Phone, Mail, MapPin, ArrowRight, FileText } from "lucide-react";
 
 export const metadata: Metadata = {
   title: "Contact & Enquiries | Anvard Global Pvt. Ltd.",

@@ -11,6 +11,13 @@ export const enquirySchema = z.object({
     .min(2, "Full name must be at least 2 characters")
     .max(100, "Full name must not exceed 100 characters")
     .regex(/^[\p{L}\s.'-]+$/u, "Please enter a valid full name"),
+  email: z
+    .string({ error: "Please enter your email address" })
+    .trim()
+    .min(1, "Please enter your email address")
+    .max(254, "Email address is too long")
+    .regex(/^[^\r\n\t]+$/, "Please enter a valid email address")
+    .pipe(z.email("Please enter a valid email address")),
   phoneNumber: z
     .string()
     .trim()

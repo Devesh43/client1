@@ -1,269 +1,520 @@
+import { randomInt } from "node:crypto";
 import nodemailer from "nodemailer";
-import { escapeHtml, sanitizeHeader } from "./utils";
 import { COMPANY } from "@/config/company";
+import {
+  renderAdminNotification,
+  renderEnquirerAcknowledgement,
+  type EnquiryEmailData,
+} from "./email-templates";
+
+export type EmailMode = "smtp" | "resend" | "development-staged";
 
 export interface SendEnquiryParams {
+  referenceId: string;
   fullName: string;
+  email: string;
   phoneNumber: string;
   serviceInterestedIn: string;
   query: string;
+  submittedAt: Date;
   ipAddress?: string;
   userAgent?: string;
+  source?: string;
 }
 
 export interface SendEmailResult {
   success: boolean;
   messageId?: string;
-  mode: "smtp" | "resend" | "development-staged";
+  mode: EmailMode;
   error?: string;
+  errorCode?: string;
+  skipped?: boolean;
 }
 
-export async function sendEnquiryEmail(params: SendEnquiryParams): Promise<SendEmailResult> {
-  const { fullName, phoneNumber, serviceInterestedIn, query } = params;
+interface SmtpConfig {
+  host: string;
+  port: number;
+  secure: boolean;
+  user: string;
+  pass: string;
+}
 
-  // Format timestamp in Asia/Kolkata
-  const now = new Date();
+interface MailPayload {
+  to: string;
+  subject: string;
+  html: string;
+  text: string;
+  replyTo?: string;
+  headers?: Record<string, string>;
+}
+
+interface SmtpErrorLike {
+  code?: string;
+  response?: string;
+  responseCode?: number;
+  message?: string;
+}
+
+const REFERENCE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+const TRANSIENT_SMTP_CODES = new Set([
+  "ETIMEDOUT",
+  "ESOCKET",
+  "ECONNECTION",
+  "ECONNRESET",
+  "EDNS",
+]);
+
+let acknowledgementCount = 0;
+let acknowledgementDate = "";
+
+function getSmtpConfig(): SmtpConfig | null {
+  const host = process.env.SMTP_HOST?.trim();
+  const user = process.env.SMTP_USER?.trim();
+  // Google displays App Passwords in groups of four. Gmail accepts them with
+  // or without spaces; normalising makes copy/paste reliable.
+  const pass = process.env.SMTP_PASS?.replace(/\s+/g, "").trim();
+
+  if (!host || !user || !pass) return null;
+
+  const port = Number(process.env.SMTP_PORT) || 465;
+  return {
+    host,
+    port,
+    secure: port === 465,
+    user,
+    pass,
+  };
+}
+
+export function getEmailMode(): EmailMode {
+  if (getSmtpConfig()) return "smtp";
+  if (process.env.RESEND_API_KEY?.trim()) return "resend";
+  return "development-staged";
+}
+
+export function isEmailConfigured(): boolean {
+  return getEmailMode() !== "development-staged";
+}
+
+function isProduction(): boolean {
+  return process.env.NODE_ENV === "production";
+}
+
+function getFromSender(): string {
+  return (
+    process.env.EMAIL_FROM?.trim() ||
+    `ANVARD GLOBAL Website <${COMPANY.email}>`
+  );
+}
+
+function getRecipient(): string {
+  return process.env.EMAIL_TO?.trim() || COMPANY.email;
+}
+
+function getMissingSmtpVariables(): string[] {
+  return ["SMTP_HOST", "SMTP_USER", "SMTP_PASS"].filter((key) => {
+    const value = process.env[key]?.trim();
+    if (key === "SMTP_PASS") {
+      return !value?.replace(/\s+/g, "");
+    }
+    return !value;
+  });
+}
+
+export function generateReferenceId(now = new Date()): string {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Kolkata",
+    year: "2-digit",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(now);
+
+  const value = (type: string) =>
+    parts.find((part) => part.type === type)?.value || "";
+
+  const date = `${value("year")}${value("month")}${value("day")}`;
+  let code = "";
+  for (let i = 0; i < 4; i += 1) {
+    code += REFERENCE_ALPHABET[randomInt(0, REFERENCE_ALPHABET.length)];
+  }
+
+  return `AG-${date}-${code}`;
+}
+
+function toTemplateData(params: SendEnquiryParams): EnquiryEmailData {
   const submittedAtKolkata = new Intl.DateTimeFormat("en-IN", {
     timeZone: "Asia/Kolkata",
     dateStyle: "full",
     timeStyle: "long",
-  }).format(now);
+  }).format(params.submittedAt);
 
-  const cleanName = sanitizeHeader(fullName);
-  const cleanPhone = sanitizeHeader(phoneNumber);
-  const cleanService = sanitizeHeader(serviceInterestedIn);
+  return {
+    referenceId: params.referenceId,
+    fullName: params.fullName,
+    email: params.email,
+    phoneNumber: params.phoneNumber,
+    serviceInterestedIn: params.serviceInterestedIn,
+    query: params.query,
+    submittedAtKolkata,
+    submittedAtIso: params.submittedAt.toISOString(),
+    ipAddress: params.ipAddress,
+    userAgent: params.userAgent,
+    source: params.source,
+  };
+}
 
-  const subject = `New Website Enquiry | Anvard Global - ${cleanName}`;
+function maskEmail(email: string): string {
+  const [localPart, domain] = email.split("@");
+  if (!domain) return "***";
+  return `${localPart.slice(0, 1)}***@${domain}`;
+}
 
-  // Plaintext body
-  const textContent = `
-NEW BUSINESS ENQUIRY
-========================================
-Name: ${cleanName}
-Phone: ${cleanPhone}
-Service Interested In: ${cleanService}
-Submitted At: ${submittedAtKolkata}
-Source: Anvard Global Corporate Website
-========================================
+function logEvent(event: string, details: Record<string, unknown>): void {
+  const payload = JSON.stringify({
+    ts: new Date().toISOString(),
+    event,
+    ...details,
+  });
 
-CLIENT QUERY:
-${query}
+  if (event.endsWith(".failed") || event === "email.config.missing") {
+    console.error(`[Email] ${payload}`);
+  } else {
+    console.log(`[Email] ${payload}`);
+  }
+}
 
-========================================
-Company: ${COMPANY.legalName}
-CIN: ${COMPANY.cin}
-Registered Office: ${COMPANY.address.full}
-Director: ${COMPANY.director}
-Official Email: ${COMPANY.email}
-Phone: ${COMPANY.phone}
-`.trim();
+function logStaging(kind: string, data: EnquiryEmailData): void {
+  if (isProduction()) return;
 
-  // Premium HTML Email with Navy (#111C30) and Champagne Gold (#C7A66B) branding
-  const htmlContent = `
-<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>${escapeHtml(subject)}</title>
-</head>
-<body style="margin: 0; padding: 0; background-color: #F4F2EC; font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; color: #1D2633; -webkit-font-smoothing: antialiased;">
-  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="background-color: #F4F2EC; padding: 40px 15px;">
-    <tr>
-      <td align="center">
-        <!-- Main Container -->
-        <table role="presentation" width="100%" max-width="600" cellspacing="0" cellpadding="0" border="0" style="max-width: 600px; background-color: #FFFFFF; border-radius: 4px; overflow: hidden; box-shadow: 0 4px 20px rgba(17, 28, 48, 0.08); border: 1px solid #E7E4DE;">
-          
-          <!-- Header (Midnight Navy & Champagne Gold) -->
-          <tr>
-            <td style="background-color: #111C30; padding: 32px 30px; text-align: center; border-bottom: 3px solid #C7A66B;">
-              <div style="color: #C7A66B; font-size: 11px; letter-spacing: 3px; text-transform: uppercase; font-weight: 600; margin-bottom: 8px;">
-                ANVARD GLOBAL PRIVATE LIMITED
-              </div>
-              <h1 style="margin: 0; color: #FAF9F6; font-size: 22px; font-weight: 400; letter-spacing: 0.5px;">
-                New Business Enquiry Received
-              </h1>
-              <div style="color: #A98B56; font-size: 12px; margin-top: 6px;">
-                ${escapeHtml(submittedAtKolkata)}
-              </div>
-            </td>
-          </tr>
+  console.log("--------------------------------------------------");
+  console.log(`[ANVARD GLOBAL] ${kind.toUpperCase()} (DEV STAGING MODE)`);
+  console.log(`Reference: ${data.referenceId}`);
+  console.log(`Timestamp: ${data.submittedAtKolkata}`);
+  console.log(`Client: ${data.fullName} <${data.email}> (${data.phoneNumber})`);
+  console.log(`Service: ${data.serviceInterestedIn}`);
+  if (kind === "admin notification") {
+    console.log(`Query: ${data.query}`);
+  }
+  console.log(
+    "Configure SMTP_HOST / SMTP_USER / SMTP_PASS in .env.local to dispatch live email."
+  );
+  console.log("--------------------------------------------------");
+}
 
-          <!-- Summary Highlights -->
-          <tr>
-            <td style="padding: 30px 30px 20px 30px;">
-              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="background-color: #FAF9F6; border: 1px solid #E7E4DE; border-radius: 4px;">
-                <tr>
-                  <td style="padding: 16px 20px; border-bottom: 1px solid #E7E4DE; width: 35%; color: #657080; font-size: 13px; font-weight: 600; text-transform: uppercase; letter-spacing: 1px;">
-                    Client Name
-                  </td>
-                  <td style="padding: 16px 20px; border-bottom: 1px solid #E7E4DE; color: #111C30; font-size: 15px; font-weight: 600;">
-                    ${escapeHtml(cleanName)}
-                  </td>
-                </tr>
-                <tr>
-                  <td style="padding: 16px 20px; border-bottom: 1px solid #E7E4DE; color: #657080; font-size: 13px; font-weight: 600; text-transform: uppercase; letter-spacing: 1px;">
-                    Telephone
-                  </td>
-                  <td style="padding: 16px 20px; border-bottom: 1px solid #E7E4DE; color: #111C30; font-size: 15px; font-weight: 600;">
-                    <a href="tel:${escapeHtml(cleanPhone.replace(/\s+/g, ""))}" style="color: #C7A66B; text-decoration: none; font-weight: 600;">
-                      ${escapeHtml(cleanPhone)}
-                    </a>
-                  </td>
-                </tr>
-                <tr>
-                  <td style="padding: 16px 20px; color: #657080; font-size: 13px; font-weight: 600; text-transform: uppercase; letter-spacing: 1px;">
-                    Focus Area
-                  </td>
-                  <td style="padding: 16px 20px; color: #111C30; font-size: 15px; font-weight: 600;">
-                    <span style="background-color: rgba(199, 166, 107, 0.15); color: #8C7142; padding: 4px 10px; border-radius: 3px; font-size: 13px; font-weight: 600;">
-                      ${escapeHtml(cleanService)}
-                    </span>
-                  </td>
-                </tr>
-              </table>
-            </td>
-          </tr>
+function asSmtpError(error: unknown): SmtpErrorLike {
+  if (typeof error === "object" && error !== null) {
+    return error as SmtpErrorLike;
+  }
+  return { message: String(error) };
+}
 
-          <!-- Message Body -->
-          <tr>
-            <td style="padding: 10px 30px 30px 30px;">
-              <div style="font-size: 12px; font-weight: 700; color: #657080; text-transform: uppercase; letter-spacing: 1.5px; margin-bottom: 10px;">
-                Detailed Query / Requirements
-              </div>
-              <div style="background-color: #FFFFFF; border-left: 3px solid #C7A66B; padding: 18px 20px; background-color: #FAF9F6; font-size: 14px; line-height: 1.7; color: #1D2633; white-space: pre-wrap;">${escapeHtml(query)}</div>
-            </td>
-          </tr>
+function classifySmtpError(error: unknown): string {
+  const smtpError = asSmtpError(error);
+  const response = smtpError.response || "";
 
-          <!-- Action Button -->
-          <tr>
-            <td style="padding: 0 30px 30px 30px; text-align: center;">
-              <a href="tel:${escapeHtml(cleanPhone.replace(/\s+/g, ""))}" style="display: inline-block; background-color: #C7A66B; color: #111C30; text-decoration: none; font-size: 14px; font-weight: 700; padding: 12px 28px; border-radius: 3px; letter-spacing: 0.5px;">
-                Call Enquirer Directly &rarr;
-              </a>
-            </td>
-          </tr>
-
-          <!-- Footer Information -->
-          <tr>
-            <td style="background-color: #111C30; padding: 24px 30px; color: #8E99A8; font-size: 11px; line-height: 1.6; border-top: 1px solid #1D2633; text-align: center;">
-              <div style="color: #FAF9F6; font-weight: 600; margin-bottom: 4px;">
-                ${COMPANY.legalName}
-              </div>
-              <div style="margin-bottom: 4px;">
-                CIN: ${COMPANY.cin} &bull; Director: ${COMPANY.director}
-              </div>
-              <div style="margin-bottom: 8px;">
-                ${COMPANY.address.full}
-              </div>
-              <div style="color: #657080;">
-                Official Inquiries: <a href="mailto:${COMPANY.email}" style="color: #C7A66B; text-decoration: none;">${COMPANY.email}</a> &bull; Phone: ${COMPANY.phone}
-              </div>
-            </td>
-          </tr>
-        </table>
-      </td>
-    </tr>
-  </table>
-</body>
-</html>
-`.trim();
-
-  const recipient = process.env.EMAIL_TO || COMPANY.email;
-  const fromSender = process.env.EMAIL_FROM || `Anvard Global Website <notifications@anvardglobal.com>`;
-
-  // 1. Try Resend if RESEND_API_KEY is configured
-  const resendApiKey = process.env.RESEND_API_KEY;
-  if (resendApiKey) {
-    try {
-      const res = await fetch("https://api.resend.com/emails", {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${resendApiKey}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          from: fromSender,
-          to: [recipient],
-          subject: subject,
-          html: htmlContent,
-          text: textContent,
-        }),
-      });
-
-      if (!res.ok) {
-        const errData = await res.json().catch(() => ({}));
-        throw new Error(errData.message || `Resend API returned status ${res.status}`);
-      }
-
-      const data = await res.json();
-      return {
-        success: true,
-        messageId: data.id,
-        mode: "resend",
-      };
-    } catch (err: any) {
-      console.error("[Email Error - Resend]:", err);
-      // Fallback to SMTP if also provided, or return error
-    }
+  if (
+    smtpError.code === "EAUTH" ||
+    smtpError.responseCode === 535 ||
+    response.includes("535")
+  ) {
+    return "EAUTH";
   }
 
-  // 2. Try Nodemailer SMTP if SMTP host/user are configured
-  const smtpHost = process.env.SMTP_HOST;
-  const smtpUser = process.env.SMTP_USER;
-  const smtpPass = process.env.SMTP_PASS;
-  const smtpPort = Number(process.env.SMTP_PORT) || 587;
+  if (
+    /5\.4\.5/.test(response) ||
+    /daily (user )?sending limit/i.test(response) ||
+    /quota/i.test(response)
+  ) {
+    return "EQUOTA";
+  }
 
-  if (smtpHost && smtpUser && smtpPass) {
+  if (smtpError.code) return smtpError.code;
+  return "ESMTP";
+}
+
+function getErrorMessage(error: unknown): string {
+  return asSmtpError(error).message || "Failed to send email";
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
+function createSmtpTransport(config: SmtpConfig) {
+  return nodemailer.createTransport({
+    host: config.host,
+    port: config.port,
+    secure: config.secure,
+    auth: {
+      user: config.user,
+      pass: config.pass,
+    },
+    connectionTimeout: 10_000,
+    greetingTimeout: 10_000,
+    socketTimeout: 20_000,
+  });
+}
+
+async function sendViaSmtp(
+  config: SmtpConfig,
+  payload: MailPayload
+): Promise<SendEmailResult> {
+  const transporter = createSmtpTransport(config);
+  const message = {
+    from: getFromSender(),
+    to: payload.to,
+    subject: payload.subject,
+    html: payload.html,
+    text: payload.text,
+    replyTo: payload.replyTo,
+    headers: payload.headers,
+  };
+
+  try {
     try {
-      const transporter = nodemailer.createTransport({
-        host: smtpHost,
-        port: smtpPort,
-        secure: smtpPort === 465,
-        auth: {
-          user: smtpUser,
-          pass: smtpPass,
-        },
-      });
-
-      const info = await transporter.sendMail({
-        from: fromSender,
-        to: recipient,
-        subject: subject,
-        text: textContent,
-        html: htmlContent,
-      });
-
+      const info = await transporter.sendMail(message);
       return {
         success: true,
         messageId: info.messageId,
         mode: "smtp",
       };
-    } catch (err: any) {
-      console.error("[Email Error - SMTP]:", err);
+    } catch (error) {
+      const errorCode = classifySmtpError(error);
+      if (!TRANSIENT_SMTP_CODES.has(errorCode)) throw error;
+
+      logEvent("email.smtp.retry", { errorCode });
+      await sleep(750);
+
+      const info = await transporter.sendMail(message);
       return {
-        success: false,
+        success: true,
+        messageId: info.messageId,
         mode: "smtp",
-        error: err.message || "Failed to send email via SMTP server",
       };
     }
+  } catch (error) {
+    return {
+      success: false,
+      mode: "smtp",
+      error: getErrorMessage(error),
+      errorCode: classifySmtpError(error),
+    };
+  } finally {
+    transporter.close();
+  }
+}
+
+async function sendViaResend(payload: MailPayload): Promise<SendEmailResult> {
+  const apiKey = process.env.RESEND_API_KEY?.trim();
+  if (!apiKey) {
+    return {
+      success: false,
+      mode: "resend",
+      error: "Resend API key is not configured",
+      errorCode: "ECONFIG",
+    };
   }
 
-  // 3. Development / Safe Local Fallback Mode
-  // When running locally without third-party email credentials, record and display full details
-  console.log("--------------------------------------------------");
-  console.log("[ANVARD GLOBAL] ENQUIRY RECEIVED (DEV STAGING MODE)");
-  console.log(`Timestamp: ${submittedAtKolkata}`);
-  console.log(`Recipient: ${recipient}`);
-  console.log(`Client: ${cleanName} (${cleanPhone})`);
-  console.log(`Service: ${cleanService}`);
-  console.log(`Query: ${query}`);
-  console.log("To dispatch live emails, configure RESEND_API_KEY or SMTP credentials in .env.local.");
-  console.log("--------------------------------------------------");
+  try {
+    const response = await fetch("https://api.resend.com/emails", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        from: getFromSender(),
+        to: [payload.to],
+        subject: payload.subject,
+        html: payload.html,
+        text: payload.text,
+        ...(payload.replyTo ? { reply_to: payload.replyTo } : {}),
+      }),
+    });
+
+    const data = (await response.json().catch(() => ({}))) as {
+      id?: string;
+      message?: string;
+    };
+
+    if (!response.ok) {
+      return {
+        success: false,
+        mode: "resend",
+        error: data.message || `Resend API returned status ${response.status}`,
+        errorCode: response.status === 401 ? "EAUTH" : "ERESEND",
+      };
+    }
+
+    return {
+      success: true,
+      messageId: data.id,
+      mode: "resend",
+    };
+  } catch (error) {
+    return {
+      success: false,
+      mode: "resend",
+      error: getErrorMessage(error),
+      errorCode: "ERESEND",
+    };
+  }
+}
+
+async function deliver(payload: MailPayload): Promise<SendEmailResult> {
+  const mode = getEmailMode();
+
+  if (mode === "smtp") {
+    return sendViaSmtp(getSmtpConfig() as SmtpConfig, payload);
+  }
+
+  if (mode === "resend") {
+    return sendViaResend(payload);
+  }
+
+  if (isProduction()) {
+    logEvent("email.config.missing", {
+      missing: getMissingSmtpVariables(),
+    });
+    return {
+      success: false,
+      mode,
+      error: "Email transport is not configured",
+      errorCode: "ECONFIG",
+    };
+  }
 
   return {
     success: true,
+    mode,
     messageId: `dev-${Date.now()}`,
-    mode: "development-staged",
   };
+}
+
+function logResult(
+  prefix: "email.admin" | "email.ack",
+  recipient: string,
+  referenceId: string,
+  result: SendEmailResult
+): void {
+  if (result.success) {
+    logEvent(`${prefix}.sent`, {
+      referenceId,
+      mode: result.mode,
+      messageId: result.messageId,
+      recipient: maskEmail(recipient),
+    });
+    return;
+  }
+
+  logEvent(`${prefix}.failed`, {
+    referenceId,
+    mode: result.mode,
+    errorCode: result.errorCode,
+    error: result.error,
+    recipient: maskEmail(recipient),
+  });
+}
+
+export async function sendEnquiryNotification(
+  params: SendEnquiryParams
+): Promise<SendEmailResult> {
+  const data = toTemplateData(params);
+  const rendered = renderAdminNotification(data);
+
+  const result = await deliver({
+    to: getRecipient(),
+    subject: rendered.subject,
+    html: rendered.html,
+    text: rendered.text,
+    replyTo: data.email,
+    headers: {
+      "X-Entity-Ref-ID": data.referenceId,
+    },
+  });
+
+  logResult("email.admin", getRecipient(), data.referenceId, result);
+
+  if (result.success && result.mode === "development-staged") {
+    logStaging("admin notification", data);
+  }
+
+  return result;
+}
+
+function consumeAcknowledgementQuota(): boolean {
+  const today = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Kolkata",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(new Date());
+
+  if (acknowledgementDate !== today) {
+    acknowledgementDate = today;
+    acknowledgementCount = 0;
+  }
+
+  const cap = Number(process.env.MAX_DAILY_ACKNOWLEDGEMENTS) || 200;
+  if (acknowledgementCount >= cap) return false;
+
+  acknowledgementCount += 1;
+  return true;
+}
+
+export async function sendEnquirerAcknowledgement(
+  params: SendEnquiryParams
+): Promise<SendEmailResult> {
+  const data = toTemplateData(params);
+
+  const selfAddresses = [getRecipient(), process.env.SMTP_USER?.trim()]
+    .filter((address): address is string => Boolean(address))
+    .map((address) => address.toLowerCase());
+
+  if (selfAddresses.includes(data.email.toLowerCase())) {
+    logEvent("email.ack.skipped", {
+      referenceId: data.referenceId,
+      reason: "self-address",
+    });
+    return {
+      success: true,
+      mode: getEmailMode(),
+      skipped: true,
+    };
+  }
+
+  if (!consumeAcknowledgementQuota()) {
+    const result: SendEmailResult = {
+      success: false,
+      mode: getEmailMode(),
+      error: "Daily acknowledgement cap reached",
+      errorCode: "EQUOTA_LOCAL",
+    };
+    logResult("email.ack", data.email, data.referenceId, result);
+    return result;
+  }
+
+  const rendered = renderEnquirerAcknowledgement(data);
+
+  const result = await deliver({
+    to: data.email,
+    subject: rendered.subject,
+    html: rendered.html,
+    text: rendered.text,
+    replyTo: getRecipient(),
+    headers: {
+      "Auto-Submitted": "auto-replied",
+      "X-Auto-Response-Suppress": "All",
+    },
+  });
+
+  logResult("email.ack", data.email, data.referenceId, result);
+
+  if (result.success && result.mode === "development-staged") {
+    logStaging("enquirer acknowledgement", data);
+  }
+
+  return result;
 }

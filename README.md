@@ -60,10 +60,11 @@ All logo variants were processed directly from the high-resolution master mark:
 * **Animations:** Framer Motion / Motion for React & native CSS transitions
 * **Icons:** Lucide React
 * **Form UX:** React Hook Form + Client-side & Server-side Zod validation
-* **Email Service:** Dual integration supporting **Resend API** and **Nodemailer SMTP**, plus development staging mode
+* **Email Service:** **Gmail SMTP via Nodemailer** (App Password), with a branded enquirer acknowledgement email, stable enquiry reference IDs, and safe development staging mode
 * **Anti-Spam Protections:**
   * In-memory IP rate limiter (maximum 5 requests per 10 minutes)
   * Hidden honeypot field (`website`) trapping automated web scrapers
+  * Per-instance daily acknowledgement cap to limit backscatter
   * Email header injection sanitization (stripping `\r\n\t`)
   * HTML entity escaping for user query inputs
 
@@ -103,21 +104,39 @@ NEXT_PUBLIC_SITE_URL="https://anvardglobal.com"
 # Destination for business enquiries
 EMAIL_TO="Anvardglobal@gmail.com"
 
-# Sender identity (must match your verified sending domain or SMTP user)
-EMAIL_FROM="Anvard Global Website <notifications@anvardglobal.com>"
+# Sender identity. With Gmail SMTP this must be the authenticated Gmail
+# address or a verified "Send mail as" alias in that account.
+EMAIL_FROM="ANVARD GLOBAL Website <Anvardglobal@gmail.com>"
 
-# --- Option A: Resend (Recommended) ---
-RESEND_API_KEY="re_123456789"
+# Promise shown in the acknowledgement email
+ENQUIRY_RESPONSE_SLA="one business day"
 
-# --- Option B: Corporate SMTP (Google Workspace / Zoho / Microsoft 365) ---
+# Per-instance daily acknowledgement cap
+MAX_DAILY_ACKNOWLEDGEMENTS="200"
+
+# --- Gmail SMTP (primary) ---
 SMTP_HOST="smtp.gmail.com"
-SMTP_PORT="587"
-SMTP_USER="notifications@anvardglobal.com"
-SMTP_PASS="app_specific_password_here"
+SMTP_PORT="465"
+SMTP_USER="Anvardglobal@gmail.com"
+SMTP_PASS="your_16_character_google_app_password"
+
+# --- Optional Resend fallback (only used when SMTP is not configured) ---
+RESEND_API_KEY=""
 ```
 
+### Gmail App Password setup
+
+1. Sign in to the Google Account used for `SMTP_USER`.
+2. Go to **Google Account → Security** and enable **2-Step Verification**.
+3. Open **Security → App passwords**, create one named `Anvard Website Enquiry`, and copy the 16-character password.
+4. Paste it into `SMTP_PASS` (spaces are fine; they are stripped by the app).
+5. Restart `npm run dev` and submit a test enquiry.
+
+> [!IMPORTANT]
+> Gmail will rewrite or reject a `From` address it does not own. Keep `EMAIL_FROM` set to the authenticated Gmail address (`Anvardglobal@gmail.com`) unless you have explicitly verified an alias under Gmail's **Send mail as** settings.
+
 > [!TIP]
-> **Zero-Downtime Safe Staging Mode:** If neither Resend nor SMTP credentials are configured, the enquiry API automatically switches to **Development Staging Mode**. Submissions are validated, given a unique reference ID, and logged in full to the secure server console with Asia/Kolkata timestamps without throwing errors to visitors.
+> **Safe Development Staging Mode:** If SMTP credentials are not configured, the enquiry API validates the submission and logs it to the server console with an Asia/Kolkata timestamp. No email leaves the server. In **production**, missing credentials produce a `503` configuration error instead of a silent success, so enquiries are never silently discarded.
 
 ---
 
@@ -130,12 +149,22 @@ npm install
 # 2. Run local development server
 npm run dev
 
-# 3. Test production build
+# 3. Run unit and SMTP integration tests
+npm test
+
+# 4. Lint and type-check
+npm run lint
+npx tsc --noEmit
+
+# 5. Test production build
 npm run build
 
-# 4. Run production server locally
+# 6. Run production server locally
 npm run start
 ```
+
+> [!NOTE]
+> `npm test` covers validation, reference IDs, both email templates, development staging, the production fail-fast path, and a local fake-SMTP integration test that verifies recipients, `Reply-To`, and auto-reply headers. It never sends real email.
 
 ---
 
@@ -144,12 +173,24 @@ npm run start
 1. Push this repository to GitHub or GitLab.
 2. Log in to [Vercel](https://vercel.com) and click **"Add New Project"**.
 3. Import the repository `clientproject1`.
-4. Under **Environment Variables**, add:
+4. Under **Environment Variables** (add to **Production** and **Preview**), add:
    * `NEXT_PUBLIC_SITE_URL` = `https://yourdomain.com`
    * `EMAIL_TO` = `Anvardglobal@gmail.com`
-   * `EMAIL_FROM` = `Anvard Global Website <notifications@yourdomain.com>`
-   * `RESEND_API_KEY` = your Resend API key (or SMTP credentials).
+   * `EMAIL_FROM` = `ANVARD GLOBAL Website <Anvardglobal@gmail.com>`
+   * `ENQUIRY_RESPONSE_SLA` = `one business day`
+   * `MAX_DAILY_ACKNOWLEDGEMENTS` = `200`
+   * `SMTP_HOST` = `smtp.gmail.com`
+   * `SMTP_PORT` = `465`
+   * `SMTP_USER` = `Anvardglobal@gmail.com`
+   * `SMTP_PASS` = your 16-character Google App Password.
 5. Click **"Deploy"**. The site will automatically build and deploy globally via Vercel Edge Network.
+6. After deployment, submit a live test enquiry from an external email address and confirm:
+   * the team inbox receives the notification;
+   * the notification's **Reply-To** points to the enquirer;
+   * the enquirer receives the acknowledgement with the same reference ID.
+
+> [!NOTE]
+> Environment-variable changes only apply to new deployments. Redeploy after updating secrets. Verify that your hosting platform permits outbound SMTP on port 465 or 587; if it does not, use the optional Resend fallback with a verified domain.
 
 ---
 
@@ -157,6 +198,6 @@ npm run start
 
 Before official public launch, the corporate leadership of Anvard Global should review:
 1. **CIN Confirmation:** Confirm CIN `U56290DL2026PTC469327` against the final MCA incorporation certificate.
-2. **Email Provider Setup:** Choose between Resend (recommended) or Corporate SMTP, and add the credentials to Vercel environment variables.
+2. **Email Provider Setup:** Generate a Google App Password for `Anvardglobal@gmail.com`, add the SMTP variables to Vercel, and confirm the acknowledgement copy and response SLA (`ENQUIRY_RESPONSE_SLA`).
 3. **Mission & Vision Statements:** Confirm or customize the proposed strategic mission and vision copy located in `src/app/about/page.tsx`.
 4. **Service Scope:** Tailor any specific consulting offerings in `src/config/services.ts` as the firm introduces specialized practices.
