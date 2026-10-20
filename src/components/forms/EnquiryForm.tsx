@@ -25,7 +25,6 @@ export function EnquiryForm({
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [submission, setSubmission] = useState<{
     referenceId: string;
-    email: string;
   } | null>(null);
   const [copied, setCopied] = useState(false);
 
@@ -100,7 +99,6 @@ export function EnquiryForm({
 
       setSubmission({
         referenceId: result.referenceId || "Reference pending",
-        email: parsed.data.email,
       });
       setSubmitSuccess(result.message || "Thank you for reaching out. Your enquiry has been received. Our team will review your message.");
       reset();
@@ -140,11 +138,6 @@ export function EnquiryForm({
 
         {submission && (
           <>
-            <p className="mt-2 text-xs leading-relaxed text-text-muted">
-              A confirmation email has been sent to{" "}
-              <span className="font-semibold text-ivory">{submission.email}</span>.
-            </p>
-
             <div className="mt-5 rounded border border-gold-500/30 bg-navy-900/70 px-4 py-3">
               <div className="text-[10px] font-semibold uppercase tracking-[0.2em] text-gold-500">
                 Your Reference
@@ -169,9 +162,7 @@ export function EnquiryForm({
             </div>
 
             <p className="mt-3 text-[11px] leading-relaxed text-text-secondary">
-              Please quote this reference in any follow-up. If the confirmation
-              email does not arrive, check your spam folder or contact us
-              directly.
+              Please quote this reference in any follow-up.
             </p>
           </>
         )}
